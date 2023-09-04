@@ -9,12 +9,136 @@ const GROUND_BOTTOM_OFFSET = 20;
 const BOX_VELOCITY_FACTOR = 0.005;
 const BOX_MAX_VELOCITY = 0.75;
 
+//
+// Enums
+//
+
 const KeyCode = Object.freeze({
   SPACE: 'Space',  
 });
 
 //
-// Helper functions
+// Neural Network
+//
+
+function sigmoid(x) {
+  return 1 / (1 + Math.exp(-x));
+}
+
+class Neuron {
+  constructor(weights, bias) {
+    this.weights = weights;
+    this.bias = bias;
+    this.result = 0.0;
+  }
+
+  activate(entries = []) {
+    this.entries = entries;
+    let v = 0;
+  
+    for(let i = 0; i < this.weights.length; i++) {
+      v += this.weights[i] * entries[i];
+    }
+    v += this.bias;
+  
+    this.result = sigmoid(v);
+  }
+
+  static create(weightsSize = 1) {
+    const weights = [];
+    for(let i = 0; i < weightsSize; i++) {
+      weights.push(Math.random());
+    }
+    return new Neuron(weights, Math.random());
+  }
+}
+
+class NeuralLayer {
+  constructor(neurons, isOutputLayer = false) {
+    this.neurons = neurons;
+    this.isOutputLayer = isOutputLayer;
+  }
+
+  get size() { return this.neurons.length; }
+  
+  static create(size = 1, weightsSize = 1, isOutputLayer = false) {
+    const neurons = [];
+    for(let i = 0; i < size; i++) {
+      neurons.push(Neuron.create(weightsSize));
+    }
+    return new NeuralLayer(neurons, isOutputLayer);
+  }
+}
+
+class NeuralNetwork {
+  constructor() {
+    this.layers = [];
+  }
+
+  get size() { return this.layers.length; }
+
+  createLayers(layersCount = [1, 1]) {
+    this.layers = [];
+    for (let i = 0; i < layersCount.length; i++) {
+      if (i == 0) {
+        this.layers.push(NeuralLayer.create(layersCount[i], 1));
+      } else {
+        this.layers.push(
+          NeuralLayer.create(
+            layersCount[i],
+            layersCount[i - 1],
+            i === layersCount.length - 1
+          )
+        );
+      }
+    }
+  }
+
+  predict(values) {
+    if (values.length !== this.layers[0].size) {
+      throw new Error('The predict input must have same length as input array!');
+    }
+
+    const result = [];
+    for (let layerIndex = 0; layerIndex < this.size; layerIndex++) {
+      const layer = this.layers[layerIndex];
+
+      if (layerIndex === 0) { // Input layer.
+        for(let neuronIndex = 0; neuronIndex < layer.size; neuronIndex++) {
+          const neuron = layer.neurons[neuronIndex];
+          neuron.activate([values[neuronIndex]]);
+        } // End of neurons. 
+      } else {
+        const lastLayer = layerIndex > 0 ? this.layers[layerIndex - 1] : null;
+        const lastLayerResults = lastLayer
+          ? lastLayer.neurons.reduce((acc, neuron) => {
+              acc.push(neuron.result);
+              return acc;
+            }, [])
+          : null;
+        
+        for(let neuronIndex = 0; neuronIndex < layer.size; neuronIndex++) {
+          const neuron = layer.neurons[neuronIndex];
+          neuron.activate(lastLayerResults);
+
+          if (layerIndex === this.size - 1) { // push the activation result
+            result.push(neuron.result);
+          }
+        } // End of neurons. 
+      }
+    } // End of layers.
+
+    return result;
+  }
+}
+
+const nn = new NeuralNetwork();
+nn.createLayers([2, 4, 2, 1]);
+console.log(nn.predict([1, 0]));
+// console.log(JSON.stringify(nn, null, 2));
+
+//
+// Game Helper functions
 //
 
 const loadSpriteAsync = (src) => new Promise((resolve, reject) => {
@@ -295,7 +419,9 @@ class Game {
   #pause = false;
 
   constructor(canvasId) {
-    this.ctx = document.getElementById(canvasId).getContext('2d');
+    this.ctx = document
+      .getElementById(canvasId)
+      .getContext('2d');
     this.ctx.canvas.width = DEFAULT_VIEW_WIDTH;
     this.ctx.canvas.height = DEFAULT_VIEW_HEIGHT;
   }
