@@ -8,19 +8,18 @@ const GRAVITY_VELOCITY = 0.00256;
 const GROUND_BOTTOM_OFFSET = 20;
 const BOX_VELOCITY_FACTOR = 0.005;
 const BOX_MAX_VELOCITY = 0.75;
-const BOX_INIT_VELOCITY = 0.15;
+const BOX_INIT_VELOCITY = 0.50;
 
 const NUM_OF_ROBOTS = 1000;
 
 const DEFAULT_NN_CONFIG = [
   { size: 5, funcName: 'SIGMOID' },
-  { size: 10, funcName: 'SIGMOID' },
-  { size: 5, funcName: 'SIGMOID' },
-  { size: 2, funcName: 'SIGMOID' },
+  { size: 10, funcName: 'LEAKY_RELU' },
+  { size: 2, funcName: 'LEAKY_RELU' },
   { size: 1, funcName: 'SIGMOID' },
 ];
 const MIN_JUMP_PROBABILITY = 0.5;
-const MUTATION_MULT = 0.1;
+const LEARN_RATE = 0.5;
 
 //
 // Enums
@@ -139,13 +138,16 @@ class Neuron {
     return new Neuron(weights, Math.random(), activationFunc);
   }
 
-  // Create a simple mutation:
-  static createMutation(weight, mut) {
-    let result = weight - mut;
-    if (Math.random() >= 0.5) {
-      result = weight + mut;
-    }
-    return Math.max(0.01, result);
+  static gaussianMutation(weight, mean = 0, stdDev = 0.1) {
+    let u = 0, v = 0;
+    while(u === 0) u = Math.random(); //Converting [0,1) to (0,1)
+    while(v === 0) v = Math.random();
+    let num = Math.sqrt( -2.0 * Math.log( u ) ) * Math.cos( 2.0 * Math.PI * v );
+  
+    // Aplica mean e stdDev
+    num = num * stdDev + mean;
+  
+    return weight + num;
   }
 }
 
@@ -443,9 +445,11 @@ class Box extends Sprite {
     if (newPos.x <= -32) {
       const platform = this.game.getGameObject('platform');
       newPos.x = this.game.viewWidth;
-      newPos.y = Math.random() >= 0.5
-        ? platform.position.y - this.sprite.naturalHeight * 4
-        : platform.position.y - this.sprite.naturalHeight;
+
+      const floatingPos = platform.position.y - this.sprite.naturalHeight * 5;
+      const groundPos = platform.position.y - this.sprite.naturalHeight;
+      newPos.y = Math.random() > 0.5 ? groundPos : floatingPos;
+      
       this.velocity = Math.min(
         BOX_MAX_VELOCITY,
         this.velocity + BOX_VELOCITY_FACTOR * deltaTime);
@@ -567,6 +571,7 @@ class Robot extends AnimatedSprite {
 class Game {
   #objs = new Map();
   #pause = false;
+  #iterationCount = 0;
 
   constructor(canvasId) {
     this.ctx = document
@@ -599,9 +604,7 @@ class Game {
     const box = await Box.create();
     box.position = {
       x: this.viewWidth + 100,
-      y: Math.random() >= 0.5
-        ? platform.position.y - box.sprite.naturalHeight * 4
-        : platform.position.y - box.sprite.naturalHeight,
+      y: platform.position.y - box.sprite.naturalHeight,
     };
 
     this.addGameObject('platform', platform);
@@ -625,9 +628,7 @@ class Game {
     const box = this.getGameObject('box');
     box.position = {
       x: this.viewWidth + 100,
-      y: Math.random() >= 0.5
-        ? platform.position.y - box.sprite.naturalHeight * 4
-        : platform.position.y - box.sprite.naturalHeight,
+      y: platform.position.y - box.sprite.naturalHeight
     };
     box.velocity = BOX_INIT_VELOCITY;
 
@@ -638,7 +639,7 @@ class Game {
     robots.sort((a, b) => b.distance - a.distance);
     const bestRobot = robots[0];
     const bestNN = bestRobot.nn;
-  
+    
     // Create mutations:
     for (let i = 1; i < robots.length; i++) {
       const robot = robots[i];
@@ -654,15 +655,23 @@ class Game {
           const neuron = layer.neurons[n];
           const bestNeuron = bestLayer.neurons[n];
 
-          if (i >= robots.length * 0.8) {          
-            neuron.weights = bestNeuron.weights.map((w) => Math.random());
+          if (l >= robots.length * 0.8) {
+            neuron.weights = neuron.weights.map((w) => Math.random());
             neuron.bias = Math.random();
+          } else if (l >= robots.length * 0.2) {
+            if (Math.random() < LEARN_RATE) {
+              neuron.weights = bestNeuron.weights.map((w) => Neuron.gaussianMutation(w));
+            }
+            if (Math.random() < LEARN_RATE) {
+              neuron.bias = Neuron.gaussianMutation(bestNeuron.bias);
+            }
           } else {
-            neuron.weights = bestNeuron.weights.map((w) =>
-              Neuron.createMutation(w, Math.random() * MUTATION_MULT));
-            neuron.bias = Neuron.createMutation(
-              bestNeuron.bias,
-              Math.random() * MUTATION_MULT);
+            if (Math.random() < LEARN_RATE) {
+              neuron.weights = neuron.weights.map((w) => Neuron.gaussianMutation(w));
+            }
+            if (Math.random() < LEARN_RATE) {
+              neuron.bias = Neuron.gaussianMutation(neuron.bias);
+            }
           }
         } // End of every neuron.
         
@@ -673,6 +682,7 @@ class Game {
         x: 10,
         y: platform.position.y - robot.frameHeight,
       };
+      robot.distance = 0;
     }
 
     bestRobot.isAlive = true;
@@ -680,8 +690,10 @@ class Game {
       x: 10,
       y: platform.position.y - bestRobot.frameHeight,
     };
+    bestRobot.distance = 0;
 
     this.#pause = false;
+    this.#iterationCount++;
   }
 
   update(deltaTime) {
@@ -714,24 +726,13 @@ class Game {
     this.ctx.clearRect(0, 0, this.viewWidth, this.viewHeight);
 
     // Show the FPS:
-    this.ctx.font = '9px Arial';
+    this.ctx.font = '12px Arial';
     this.ctx.fillStyle = 'black';
-    this.ctx.fillText(`FPS: ${fps}`, 5, 10);
-
+    this.ctx.fillText(`FPS: ${fps}`, 5, 12);
+    this.ctx.fillText(`Iteration: ${this.#iterationCount}`, 5, 24)
     // Draw game objects
     for (const obj of this.#objs.values()) {
       obj.draw(this.ctx);
-      const rect = obj.rect;
-      if (rect) {
-        this.ctx.beginPath();
-        this.ctx.strokeStyle = "blue";
-        this.ctx.strokeRect(
-          rect.left,
-          rect.top,
-          rect.right - rect.left,
-          rect.bottom - rect.top);
-        this.ctx.stroke();
-      }
     }
   }
 }
