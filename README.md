@@ -6,6 +6,8 @@ To train the robots to avoid obstacles, the code basicaly starts the game with 1
 
 After some iterations, you're going to see the best robot running forever! ;)
 
+![Alt Text](./example/robot_running.gif)
+
 > Note: No dependencies were used here, everything was created from scratch. There is a lot improvements to be made on the code, but does the job.
 
 ## How to run
